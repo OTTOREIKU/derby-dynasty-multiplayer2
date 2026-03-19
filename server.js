@@ -5,7 +5,7 @@ const wss  = new WebSocket.Server({ port: PORT });
 
 console.log(`Derby Dynasty relay running on port ${PORT}`);
 
-// rooms: code -> { host_id, clients: Map(player_id -> ws) }
+// rooms: code -> { host_id, host_name, is_public, player_count, clients: Map(pid -> ws) }
 const rooms = new Map();
 
 function generateCode() {
@@ -31,6 +31,21 @@ function markAlive(ws) {
   ws.lastSeen = Date.now();
 }
 
+function getPublicLobbies() {
+  const list = [];
+  for (const [code, room] of rooms) {
+    if (room.is_public) {
+      list.push({
+        code,
+        host_name:    room.host_name,
+        player_count: room.clients.size,
+        max_players:  6,
+      });
+    }
+  }
+  return list;
+}
+
 wss.on("connection", (ws) => {
   ws.player_id = null;
   ws.room_code = null;
@@ -45,23 +60,38 @@ wss.on("connection", (ws) => {
     try { msg = JSON.parse(raw); } catch { return; }
     const type = msg.type || "";
 
+    // ── KEEPALIVE ──────────────────────────────────────────
     if (type === "PING") {
       if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "PONG" }));
       return;
     }
 
-    if (type === "CREATE_ROOM") {
-      const pid = msg.player_id;
-      let code;
-      do { code = generateCode(); } while (rooms.has(code));
-      rooms.set(code, { host_id: pid, clients: new Map([[pid, ws]]) });
-      ws.player_id = pid;
-      ws.room_code = code;
-      ws.send(JSON.stringify({ type: "ROOM_CREATED", code }));
-      console.log(`Room ${code} created by ${pid}`);
+    // ── PUBLIC LOBBY LIST ──────────────────────────────────
+    if (type === "LIST_LOBBIES") {
+      ws.send(JSON.stringify({ type: "LOBBY_LIST", lobbies: getPublicLobbies() }));
       return;
     }
 
+    // ── CREATE ROOM ────────────────────────────────────────
+    if (type === "CREATE_ROOM") {
+      const pid       = msg.player_id;
+      const is_public = msg.public === true;
+      let code;
+      do { code = generateCode(); } while (rooms.has(code));
+      rooms.set(code, {
+        host_id:      pid,
+        host_name:    msg.name || "???",
+        is_public,
+        clients:      new Map([[pid, ws]])
+      });
+      ws.player_id = pid;
+      ws.room_code = code;
+      ws.send(JSON.stringify({ type: "ROOM_CREATED", code, is_public }));
+      console.log(`Room ${code} created by ${pid} (${is_public ? "public" : "private"})`);
+      return;
+    }
+
+    // ── JOIN ROOM ──────────────────────────────────────────
     if (type === "JOIN_ROOM") {
       const code = (msg.code || "").toUpperCase().trim();
       const pid  = msg.player_id;
@@ -80,6 +110,7 @@ wss.on("connection", (ws) => {
       return;
     }
 
+    // ── LEAVE ROOM ─────────────────────────────────────────
     if (type === "LEAVE_ROOM") {
       const pid  = msg.player_id || ws.player_id;
       const code = ws.room_code;
@@ -97,7 +128,7 @@ wss.on("connection", (ws) => {
       return;
     }
 
-    // Routed messages
+    // ── ROUTED MESSAGES ────────────────────────────────────
     const code = ws.room_code;
     if (!code) return;
     const room = rooms.get(code);
@@ -139,7 +170,7 @@ wss.on("connection", (ws) => {
   ws.on("error", (err) => console.error(`WS error for ${ws.player_id}: ${err.message}`));
 });
 
-// ── Heartbeat: protocol ping every 15s, kill if silent for 45s ──────────
+// ── Heartbeat ────────────────────────────────────────────────
 const heartbeat = setInterval(() => {
   const now = Date.now();
   wss.clients.forEach((ws) => {

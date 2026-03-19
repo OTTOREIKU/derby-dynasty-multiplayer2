@@ -1,25 +1,25 @@
-# fly.toml — Derby Dynasty Relay Server
-# Deploy with: fly deploy
+# fly.toml app configuration file generated for derby-dynasty-relay-fly on 2026-03-19T08:45:07-04:00
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
 
-app = "derby-dynasty-relay"
-primary_region = "ord"  # Chicago — change to closest region to your players
-                        # Options: ord(Chicago) lax(LA) iad(Virginia) lhr(London)
-                        #          cdg(Paris) syd(Sydney) nrt(Tokyo) sin(Singapore)
+app = 'derby-dynasty-relay-fly'
+primary_region = 'ord'
 
 [build]
 
 [http_service]
   internal_port = 8080
-  force_https   = true
-  auto_stop_machines  = false   # IMPORTANT: keep always-on, no cold starts
+  force_https = true
+  auto_stop_machines = 'off'
   auto_start_machines = true
-  min_machines_running = 1      # always at least 1 machine running
+  min_machines_running = 1
 
   [http_service.concurrency]
-    type       = "connections"
+    type = 'connections'
     hard_limit = 100
     soft_limit = 80
 
 [[vm]]
-  size   = "shared-cpu-1x"   # free tier — 256MB RAM, plenty for a relay
-  memory = "256mb"
+  size = 'shared-cpu-1x'
+  memory = '256mb'
