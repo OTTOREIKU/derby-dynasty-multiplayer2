@@ -1,0 +1,25 @@
+# fly.toml — Derby Dynasty Relay Server
+# Deploy with: fly deploy
+
+app = "derby-dynasty-relay"
+primary_region = "ord"  # Chicago — change to closest region to your players
+                        # Options: ord(Chicago) lax(LA) iad(Virginia) lhr(London)
+                        #          cdg(Paris) syd(Sydney) nrt(Tokyo) sin(Singapore)
+
+[build]
+
+[http_service]
+  internal_port = 8080
+  force_https   = true
+  auto_stop_machines  = false   # IMPORTANT: keep always-on, no cold starts
+  auto_start_machines = true
+  min_machines_running = 1      # always at least 1 machine running
+
+  [http_service.concurrency]
+    type       = "connections"
+    hard_limit = 100
+    soft_limit = 80
+
+[[vm]]
+  size   = "shared-cpu-1x"   # free tier — 256MB RAM, plenty for a relay
+  memory = "256mb"
