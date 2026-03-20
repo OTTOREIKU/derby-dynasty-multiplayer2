@@ -5,7 +5,7 @@ const wss  = new WebSocket.Server({ port: PORT });
 
 console.log(`Derby Dynasty relay running on port ${PORT}`);
 
-// rooms: code -> { host_id, host_name, is_public, player_count, clients: Map(pid -> ws) }
+// rooms: code -> { host_id, host_name, is_public, clients: Map(pid -> ws) }
 const rooms = new Map();
 
 function generateCode() {
@@ -35,12 +35,7 @@ function getPublicLobbies() {
   const list = [];
   for (const [code, room] of rooms) {
     if (room.is_public) {
-      list.push({
-        code,
-        host_name:    room.host_name,
-        player_count: room.clients.size,
-        max_players:  6,
-      });
+      list.push({ code, host_name: room.host_name, player_count: room.clients.size, max_players: 6 });
     }
   }
   return list;
@@ -60,38 +55,29 @@ wss.on("connection", (ws) => {
     try { msg = JSON.parse(raw); } catch { return; }
     const type = msg.type || "";
 
-    // ── KEEPALIVE ──────────────────────────────────────────
     if (type === "PING") {
       if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "PONG" }));
       return;
     }
 
-    // ── PUBLIC LOBBY LIST ──────────────────────────────────
     if (type === "LIST_LOBBIES") {
       ws.send(JSON.stringify({ type: "LOBBY_LIST", lobbies: getPublicLobbies() }));
       return;
     }
 
-    // ── CREATE ROOM ────────────────────────────────────────
     if (type === "CREATE_ROOM") {
       const pid       = msg.player_id;
       const is_public = msg.public === true;
       let code;
       do { code = generateCode(); } while (rooms.has(code));
-      rooms.set(code, {
-        host_id:      pid,
-        host_name:    msg.name || "???",
-        is_public,
-        clients:      new Map([[pid, ws]])
-      });
+      rooms.set(code, { host_id: pid, host_name: msg.name || "???", is_public, clients: new Map([[pid, ws]]) });
       ws.player_id = pid;
       ws.room_code = code;
       ws.send(JSON.stringify({ type: "ROOM_CREATED", code, is_public }));
-      console.log(`Room ${code} created by ${pid} (${is_public ? "public" : "private"})`);
+      console.log(`Room ${code} created by ${pid}`);
       return;
     }
 
-    // ── JOIN ROOM ──────────────────────────────────────────
     if (type === "JOIN_ROOM") {
       const code = (msg.code || "").toUpperCase().trim();
       const pid  = msg.player_id;
@@ -103,14 +89,19 @@ wss.on("connection", (ws) => {
       ws.player_id = pid;
       ws.room_code = code;
       ws.send(JSON.stringify({ type: "JOIN_OK", code }));
-      for (const [id, client] of room.clients)
-        if (id !== pid && client.readyState === WebSocket.OPEN)
+      // Tell new player about existing players, and existing players about new player
+      for (const [id, client] of room.clients) {
+        if (id !== pid && client.readyState === WebSocket.OPEN) {
+          // Tell existing player that new player joined
           client.send(JSON.stringify({ type: "PLAYER_JOINED", player_id: pid, name }));
+          // Tell new player about this existing player (for WebRTC offer/answer)
+          ws.send(JSON.stringify({ type: "PEER_EXISTS", player_id: id }));
+        }
+      }
       console.log(`${pid} joined room ${code}`);
       return;
     }
 
-    // ── LEAVE ROOM ─────────────────────────────────────────
     if (type === "LEAVE_ROOM") {
       const pid  = msg.player_id || ws.player_id;
       const code = ws.room_code;
@@ -128,7 +119,23 @@ wss.on("connection", (ws) => {
       return;
     }
 
-    // ── ROUTED MESSAGES ────────────────────────────────────
+    // ── WebRTC SIGNALING — route SDP and ICE candidates between specific peers ──
+    // These are only used during connection setup, then WebRTC takes over
+    if (type === "SIGNAL") {
+      const code = ws.room_code;
+      if (!code) return;
+      const room = rooms.get(code);
+      if (!room) return;
+      const target_pid = msg.target_id;
+      const target_ws  = room.clients.get(target_pid);
+      if (target_ws && target_ws.readyState === WebSocket.OPEN) {
+        msg.from_id = ws.player_id;
+        target_ws.send(JSON.stringify(msg));
+      }
+      return;
+    }
+
+    // ── ROUTED MESSAGES (fallback for lobby phase, before WebRTC is ready) ──
     const code = ws.room_code;
     if (!code) return;
     const room = rooms.get(code);
@@ -170,14 +177,11 @@ wss.on("connection", (ws) => {
   ws.on("error", (err) => console.error(`WS error for ${ws.player_id}: ${err.message}`));
 });
 
-// ── Heartbeat ────────────────────────────────────────────────
+// Heartbeat
 const heartbeat = setInterval(() => {
   const now = Date.now();
   wss.clients.forEach((ws) => {
-    if (!ws.isAlive && (now - (ws.lastSeen || now)) > 45000) {
-      console.log(`Terminating dead client ${ws.player_id}`);
-      ws.terminate(); return;
-    }
+    if (!ws.isAlive && (now - (ws.lastSeen || now)) > 45000) { ws.terminate(); return; }
     ws.isAlive = false;
     ws.ping();
   });
