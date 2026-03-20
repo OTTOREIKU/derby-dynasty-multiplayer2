@@ -119,6 +119,27 @@ wss.on("connection", (ws) => {
       return;
     }
 
+    // ── KICK PLAYER ────────────────────────────────────────────────────────────
+    if (type === "KICK_PLAYER") {
+      const code = ws.room_code;
+      if (!code) return;
+      const room = rooms.get(code);
+      if (!room || room.host_id !== ws.player_id) return;  // only host can kick
+      const target_pid = msg.target_id;
+      const target_ws  = room.clients.get(target_pid);
+      if (target_ws && target_ws.readyState === WebSocket.OPEN) {
+        target_ws.send(JSON.stringify({ type: "KICKED", reason: "Kicked by host" }));
+        target_ws.room_code = null;
+      }
+      room.clients.delete(target_pid);
+      // Notify remaining players
+      for (const [, client] of room.clients)
+        if (client.readyState === WebSocket.OPEN)
+          client.send(JSON.stringify({ type: "PLAYER_LEFT", player_id: target_pid }));
+      console.log(`${target_pid} was kicked from room ${code}`);
+      return;
+    }
+
     // ── WebRTC SIGNALING — route SDP and ICE candidates between specific peers ──
     // These are only used during connection setup, then WebRTC takes over
     if (type === "SIGNAL") {
